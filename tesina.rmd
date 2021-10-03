@@ -1,0 +1,553 @@
+---
+title: "Bike Sharing demand prediction"
+subtitle: "Mathematics in Machine Learning"
+author: "Giacomo Zema"
+output: 
+  bookdown::html_document2:
+    fig_caption: true
+    theme: readable
+    highlight: pygments
+    code_folding: hide      # hide code by default
+    df_print: paged
+    toc: true               # table of contents
+    number_sections: true   
+    toc_depth: 3
+    toc_float: false         # floating toc
+link-citations: true
+header-includes:
+  - \usepackage{bm}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.height = 12, fig.width = 16)
+```
+# dev environment
+the project is a R notebook with R markdown 
+this are the r packages used
+```{r include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(psych)
+library(ggpubr)
+library(car)
+library(MASS)
+library(DataExplorer)
+library(fastDummies)
+library(caret)
+library(randomForest)
+```
+
+# the dataset
+
+dataset visualization and data 
+
+seoul bike sharing demand dataset
+
+```{r}
+bikes.old <- read.csv(file="C:\\Users\\Giacomo\\Desktop\\mml\\SeoulBikeData.csv")
+head(bikes.old)
+```
+
+
+```{r}
+bikes.old$wday <- as.POSIXlt(bikes.old$Date, format = '%d/%m/%Y')$wday
+
+
+bikes <- bikes.old %>%
+  separate(Date, sep="/", into = c("day", "month", "year"))
+  
+head(bikes)
+```
+```{r}
+to_wend <- function(wday){
+  if(wday==6 | wday==0){
+    wend = 1
+  } else {
+    wend = 0
+  }
+}
+
+bikes$wend = sapply(bikes$wday, to_wend)
+head(bikes)
+```
+
+the response variable is the hourly rented bike count
+
+plot the histogram of the response
+```{r}
+
+resp <- ggplot(data=bikes) + 
+  geom_histogram(aes(Count), binwidth = 30) +
+  theme(text = element_text(size=20))+
+  xlab("bike count")
+
+resp_log <- ggplot(data=bikes) + 
+  geom_histogram(aes(log(Count+1)), binwidth = 0.1) +
+  theme(text = element_text(size=20))+
+  xlab("log bike count")
+
+resp_qq <- ggplot(data=bikes, aes(sample = Count))+
+  geom_qq(alpha = 0.5, size=0.8) +
+  theme(text = element_text(size=20))+
+  stat_qq_line(color="red", alpha=0.7, size=0.5, linetype=2)
+
+resp_qq_log <- ggplot(data=bikes, aes(sample = log(Count+1)))+
+  geom_qq(alpha = 0.5, size=0.8) +
+  theme(text = element_text(size=20))+
+  stat_qq_line(color="red", alpha=0.7, size=0.5, linetype=2)
+  
+ggarrange(resp, resp_log, resp_qq, resp_qq_log, ncol = 2, nrow = 2)
+```
+
+the situation improves with the log transformation, but there are many zero values
+```{r}
+bikes$logCount <- log(bikes$Count +1)
+head(bikes)
+```
+
+
+zero values and func no func
+
+as we can see the zero values of the response variables coincide with the no func factor.
+This way we can eliminate the problem of zero values by filtering out the no func values.
+```{r}
+#check out zero values of count
+
+bikes.zero <-subset(bikes, bikes$Count==0)
+print("The amount of zero values of the response variable is: ")
+print(nrow(bikes.zero))
+
+bikes.nofunc <-subset(bikes, bikes$Func=="No")
+print("The amount of rows corresponding to non functional hours is: ")
+print(nrow(bikes.nofunc))
+
+bikes.nfzero <- subset(bikes.zero, bikes.zero$Func=="No")
+print('The amount of rows corresponding to zero values of the response variable whose functional attribute is No: ')
+print(nrow(bikes.nfzero))
+```
+
+
+visualize the data with plots
+
+plot the correlation between quantitative attributes 
+
+```{r}
+
+bikes.quant = subset(bikes.old, select=-c(Date, Seasons, Holiday, Func, wday))
+  
+
+pairs.panels(bikes.quant,
+             method = "pearson",
+             hist.col = "#00AFBB",
+             density = TRUE,  # show density plots
+             ellipses = TRUE, # show correlation ellipses
+             lm=TRUE #Plot the linear fit rather than the LOESS smoothed fits.
+             )
+```
+
+
+
+
+average user count by hour of the day 
+
+```{r}
+means <- aggregate(Count ~ Hour, bikes, mean)
+
+ggplot(means, aes(x=Hour, y = Count))+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.3, colour="92") + geom_point(size=4, colour="92")
+```
+average user count by hour across years
+
+
+
+```{r}
+bikes17 <-subset(bikes, bikes$year=="2017")
+bikes18 <-subset(bikes, bikes$year=="2018")
+means17 <- aggregate(Count ~ Hour, bikes17, mean)
+means18 <- aggregate(Count ~ Hour, bikes18, mean)
+
+means18$year <- "2018"
+means17$year<-"2017"
+means_year <- rbind(means17, means18)
+
+
+ggplot(means_year, aes(x=Hour, y = Count, colour = year))+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.3) + geom_point(size=4)
+```
+we can see that the average hourly count follows the same trend, but the average number is lower for year 2017, this is due to the fact that the dataset contains only the last month of 2017 and 11 months of 2018
+as we can see the total number of rows for year 2017 is much lower than 2018. Another important difference is that the month of December that is the only one for 2017, is one of the coldest of the year and from the correlation measures we observed how the count and the temperature are positively correlated, so lower temperature results in lower count, we can understand this aspect better if we display the average hourly count for the year 2017 and the month of January of 2018. 
+
+Because of the previous observations I will exclude the year as a feature for the regression model.
+
+count the total number of rows for each year
+
+```{r}
+
+tot17 <- nrow(bikes17)
+tot18 <- nrow(bikes18)
+
+
+tot <- c(tot17, tot18)
+year <- c("2017", "2018")
+
+tot_year <- data.frame(tot, year)
+
+bikes18_jan <-subset(bikes, bikes$year=="2018" & bikes$month=="01")
+
+means18_jan <- aggregate(Count ~ Hour, bikes18_jan, mean)
+means18_jan$year <- "2018"
+means_y2 <- rbind(means17, means18_jan)
+
+ggplot(tot_year, aes(x=year, y=tot, label=tot))+
+  geom_bar(stat="identity", fill="92")+
+  labs(y="Total number of rows", x="Year")+
+  theme(text = element_text(size=20))+
+  geom_text(position=position_dodge(1), vjust=-0.5, size=8)
+
+
+  
+
+```
+plot the average hourly count for the month of january 2018 and the month of december 2017
+here we can see the year itself does not contribute to the response as much as the month
+
+```{r}
+ggplot(means_y2, aes(x=Hour, y = Count, colour = year))+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.3) + geom_point(size=4)
+```
+plot average count by month
+```{r}
+means_month <- aggregate(Count~month, bikes, mean)
+
+ggplot(means_month, aes(x=month, y=Count, fill=month))+
+  geom_bar(stat="identity")+
+  theme(text = element_text(size=20))+
+  labs(y="Average Count", x="Month")
+
+```
+plot average hourly count across months
+
+
+we can observe that the hourly trend is similar across months, what changes is obviously the actual count.
+```{r}
+bikes.jan <-subset(bikes, bikes$month=="01")
+bikes.feb <-subset(bikes, bikes$month=="02")
+bikes.mar <-subset(bikes, bikes$month=="03")
+bikes.apr <-subset(bikes, bikes$month=="04")
+bikes.may <-subset(bikes, bikes$month=="05")
+bikes.jun <-subset(bikes, bikes$month=="06")
+bikes.jul <-subset(bikes, bikes$month=="07")
+bikes.aug <-subset(bikes, bikes$month=="08")
+bikes.sep <-subset(bikes, bikes$month=="09")
+bikes.oct <-subset(bikes, bikes$month=="10")
+bikes.nov <-subset(bikes, bikes$month=="11")
+bikes.dec <-subset(bikes, bikes$month=="12")
+
+means.jan <- aggregate(Count ~ Hour, bikes.jan, mean)
+means.feb <- aggregate(Count ~ Hour, bikes.feb, mean)
+means.mar <- aggregate(Count ~ Hour, bikes.mar, mean)
+means.apr <- aggregate(Count ~ Hour, bikes.apr, mean)
+means.may <- aggregate(Count ~ Hour, bikes.may, mean)
+means.jun <- aggregate(Count ~ Hour, bikes.jun, mean)
+means.jul <- aggregate(Count ~ Hour, bikes.jul, mean)
+means.aug <- aggregate(Count ~ Hour, bikes.aug, mean)
+means.sep <- aggregate(Count ~ Hour, bikes.sep, mean)
+means.oct <- aggregate(Count ~ Hour, bikes.oct, mean)
+means.nov <- aggregate(Count ~ Hour, bikes.nov, mean)
+means.dec <- aggregate(Count ~ Hour, bikes.dec, mean)
+
+means.jan$month <- "January"
+means.feb$month <- "February"
+means.mar$month <- "March"
+means.apr$month <- "April"
+means.may$month <- "May"
+means.jun$month <- "June"
+means.jul$month <- "July"
+means.aug$month <- "August"
+means.sep$month <- "September"
+means.oct$month <- "October"
+means.nov$month <- "November"
+means.dec$month <- "December"
+
+
+means_month <- rbind(means.jan, means.feb, means.mar, means.apr, means.may, means.jun, means.jul, means.aug, means.sep, means.oct, means.dec)
+
+means_month$month <- factor(means_month$month, levels= c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))
+
+ggplot(means_month, aes(x=Hour, y = Count, colour = month))+
+  theme(text = element_text(size=20), legend.position = "right")+
+  geom_line(size=1.3) + geom_point(size=4)
+```
+
+plot average user count by hour across seasons
+
+```{r}
+bikes.winter <-subset(bikes, bikes$Seasons=="Winter")
+bikes.spring <-subset(bikes, bikes$Seasons=="Spring")
+bikes.summer <-subset(bikes, bikes$Seasons=="Summer")
+bikes.autumn <-subset(bikes, bikes$Seasons=="Autumn")
+
+means.winter <- aggregate(Count ~ Hour, bikes.winter, mean)
+means.spring <- aggregate(Count ~ Hour, bikes.spring, mean)
+means.summer <- aggregate(Count ~ Hour, bikes.summer, mean)
+means.autumn <- aggregate(Count ~ Hour, bikes.autumn, mean)
+
+means.winter$Seasons <- "Winter"
+means.spring$Seasons <- "Spring"
+means.summer$Seasons <- "Summer"
+means.autumn$Seasons <- "Autumnr"
+
+means_seasons <- rbind(means.winter, means.spring, means.summer, means.autumn)
+
+
+ggplot(means_seasons, aes(x=Hour, y = Count, colour = Seasons))+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.3) + geom_point(size=4)
+```
+
+
+
+
+
+
+plot average user count by hour across week days and week end
+
+we can see hour the spikes corresponding to rush hours are no longer present, because people are not commuting to work on weekends, while the count is higher during the night and in the hours during which people are usually working (from 10 to 17). From the paper attached to the dataset I observed the graph showing the average users count by hour across all days of the week and observed how all weekdays have very similar hourly counts and those of saturday and sunday are very close to each other, so I concluded that having only two factors instead of seven was the better choice.
+```{r}
+bikes.wday <-subset(bikes, bikes$wend==0)
+bikes.wend <-subset(bikes, bikes$wend==1)
+means.wday <- aggregate(Count ~ Hour, bikes.wday, mean)
+means.wend <- aggregate(Count ~ Hour, bikes.wend, mean)
+
+means.wday$wend <- "week-day"
+means.wend$wend <- "week-end"
+means_wend <- rbind(means.wday, means.wend)
+
+
+ggplot(means_wend, aes(x=Hour, y = Count, colour = wend))+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.3) + geom_point(size=4)
+```
+
+
+
+```{r}
+bikes.noday <- subset(bikes, select=-c(day))
+plot_intro(bikes)
+plot_bar(bikes)
+plot_correlation(bikes.noday)
+
+```
+
+
+
+
+
+
+## Feature importance
+ 
+use the recursive feature elimination algorithm in order to evaluate how rmse changes when certain features are removed, thus ranking the features by their importance in predicting the user count.
+
+we will use log count as the response and ignore the count attribute in this step.
+
+```{r}
+
+bikes.log <- subset(bikes, select = -c(Count, day))
+
+#save categorical features as factors
+
+bikes.log <- bikes.log %>%
+  mutate_at(c("month", "year", "Seasons", "Holiday", "Func", "wday", "wend"),
+            as.factor)
+
+bikes.dummies <- dummy_cols(bikes.log, 
+                            select_columns = c("month", "year", "Seasons", "Holiday", "Func", "wday", "wend"),
+                            remove_selected_columns = TRUE
+                            )
+#rename columns to better readability
+
+bikes.dummies <- bikes.dummies %>%
+  rename(
+    Func = Func_Yes,
+    No_Func = Func_No,
+    Holiday = Holiday_Holiday,
+    No_Holiday = `Holiday_No Holiday`,
+    Winter = Seasons_Winter,
+    Spring = Seasons_Spring,
+    Summer = Seasons_Summer,
+    Autumn = Seasons_Autumn,
+    January = month_01,
+    February = month_02,
+    March = month_03,
+    April = month_04,
+    May = month_05,
+    June = month_06,
+    July = month_07,
+    August = month_08,
+    September = month_09,
+    October = month_10,
+    November = month_11,
+    December = month_12,
+    Monday = wday_1,
+    Tuesday = wday_2,
+    Wednesday = wday_3,
+    Thursday = wday_4,
+    Friday = wday_5,
+    Saturday = wday_6,
+    Sunday = wday_0,
+    Weekend = wend_1,
+    Weekday = wend_0
+    
+  )
+
+#print(ncol(bikes.dummies))
+
+```
+
+
+recursive feature elimination
+
+
+```{r}
+control <- rfeControl(functions = rfFuncs, #random forest, linear model implementation has a bug
+                      method = "cv", #cross validation
+                      number = 10 # 10-fold cross validation
+                      )
+
+#define attribute variables and response variable
+
+x <- subset(bikes.dummies, select = -c(logCount))
+y <- bikes.dummies$logCount
+
+#randomly split the dataset into train and test sets
+
+set.seed(3456)
+inTrain <- createDataPartition(y, p= .8, list = FALSE)
+
+x_train <- x[inTrain, ]
+x_test  <- x[-inTrain, ]
+
+y_train <- y[inTrain]
+y_test  <- y[-inTrain]
+
+
+y_train <- as.matrix(y_train)
+
+head(x_train)
+
+
+
+result_rfe <- rfe(x = x_train,
+                  y = y_train,
+                  sizes = c(1:40),
+                  rfeControl = control,
+                  verbose=TRUE,
+                  allowParallel=FALSE
+                  )
+
+print(result_rfe, row.names = FALSE)
+```
+
+
+
+rank features by importance 
+
+```{r}
+size = 40
+
+variables <- result_rfe$variables
+
+var_set <- variables[variables$Variables==size, ]
+
+var_set <- aggregate(var_set[, c("Overall")], list(var_set$var), mean)
+
+var_order <- order(var_set[ , c("x")], decreasing = TRUE)[1:size]
+var_importance <- var_set
+var_importance$Variable <- as.data.frame(var_set[var_order, ])$Group.1
+var_importance$Importance <- as.data.frame(var_set[var_order, ])$x
+var_importance <- subset(var_importance, select = -c(Group.1, x))
+
+print(var_importance)
+```
+
+
+plot rfe output
+
+```{r}
+ggplot(data = result_rfe)+
+  theme(text = element_text(size=20))+
+  geom_line(size=1.5, col="92")+
+  geom_point(size=4, col="92")
+```
+
+```{r}
+var_importance$Variable <- reorder(var_importance$Variable, -var_importance$Importance)
+ggplot(data = var_importance, aes(x=Variable, y=Importance))+
+  geom_bar(stat="identity", fill = "92")+
+  theme(text = element_text(size=20))+
+  theme(axis.text.x=element_text(angle=75,hjust=1,vjust=1))
+```
+```{r}
+print(predictors(result_rfe))
+```
+
+
+
+# Linear Models
+
+## The General Linear Model
+
+## Least Square Estimates
+
+## Metrics
+
+## The Null Model
+```{r}
+null.lm <- lm(logCount ~ 1, bikes)
+summary(null.lm)
+```
+
+
+## Simple Linear Regression
+```{r}
+simple.lm <- lm(logCount ~ Hour, data = bikes.log)
+summary(simple.lm)
+
+
+```
+
+Plot the regression line
+```{r}
+coeff <- coefficients(simple.lm)
+
+ggplot(bikes.log, aes(x=Hour, y=logCount))+
+  geom_point(size=3, color='88')+
+  theme(text = element_text(size=20))+
+  geom_abline(slope = coeff[2], intercept = coeff[1], size=2, color='92')
+```
+
+
+## Multiple Regression
+
+## Complete Model
+```{r}
+complete.lm <- lm(logCount ~ ., data = bikes.log)
+summary(complete.lm)
+```
+
+
+## Smaller Models
+
+## ANOVA and AIC
+
+## Residuals
+
+# Random Forest Regression
+
+
+
+
+
