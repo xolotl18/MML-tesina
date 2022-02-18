@@ -1,30 +1,51 @@
 ---
-title: "Bike Sharing demand prediction"
+title: "Bike Sharing Demand Prediction"
 subtitle: "Mathematics in Machine Learning"
-author: "Giacomo Zema"
+author: "Giacomo Zema - s269614"
 output: 
   bookdown::html_document2:
     fig_caption: true
     theme: readable
     highlight: pygments
-    code_folding: hide      # hide code by default
+    code_folding: hide      
     df_print: paged
-    toc: true               # table of contents
+    toc: true               
     number_sections: true   
     toc_depth: 3
-    toc_float: false         # floating toc
+    toc_float: false   
+bibliography: bibliography.bib
+nocite: '@*'
 link-citations: true
 header-includes:
   - \usepackage{bm}
+  - \usepackage{asmath}
 ---
+
+<style type="text/css">
+
+body, td {
+   font-size: 20px;
+}
+code.r{
+  font-size: 18px;
+}
+pre {
+  font-size: 20px
+}
+</style>
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, fig.height = 12, fig.width = 16)
 ```
-# dev environment
-the project is a R notebook with R markdown 
-this are the r packages used
-```{r include=FALSE}
+
+# Introduction
+![A bike sharing station in Seoul, South Korea](C:\\Users\\Giacomo\\Desktop\\mml\\mml_tesina\\image.png)
+
+
+## Development environment
+The project was carried out using *R studio* and *R markdown*
+
+```{r results='hide', warning=FALSE, message=FALSE}
 library(tidyverse)
 library(ggplot2)
 library(psych)
@@ -34,20 +55,116 @@ library(MASS)
 library(DataExplorer)
 library(fastDummies)
 library(caret)
+library(tree)
 library(randomForest)
+library(gbm)
+library(kableExtra)
 ```
 
-# the dataset
+## Abstract
 
-dataset visualization and data 
+A *bike sharing system* allows people to borrow and return a bike froma bike station to another station that belongs to the same network. It has significant impacts on enstablishing a larger cycling community, increase the use of transportation, minimizing greenhouse gas emissions, enhancing publich health and reducing traffic.
+As the bike sharing paradigm gains more popularity it becomes important to provide a stable supply of rental bikes to the users. The crucial part is the prediction of the *bike count* required at each hour.
+In the following work we will analyze the use of certain parameters to predict the hourly bike count in the city of Seoul, South Korea.
 
-seoul bike sharing demand dataset
+We will start by exploring the different features used for this task and then we will fit several linear models in order to find the best set of features for the regression. In the last section we will explore an alternative to linear models for regression, which is Tree Based regression models and we will draw our conclusions.
+
+
+# Exploratory Data Analysis
+
+## The Dataset
+The dataset is the [Seoul Bike Sharing Dataset](https://archive.ics.uci.edu/ml/datasets/Seoul+Bike+Sharing+Demand) downloaded from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php).
+The dataset contains data for 365 days, from December 2017 to November 2018 and contains the following attributes:
+```{r}
+attributes.df <- data.frame(
+  Attributes = c(
+    "Date",
+    "Rented Bike Count",
+    "Hour",
+    "Temperature",
+    "Humidity",
+    "Windspeed",
+    "Visibility",
+    "Dew Point Temperature",
+    "Solar Radiation",
+    "Rainfall",
+    "Snowfall",
+    "Seasons",
+    "Holiday",
+    "Functional Day"
+  ),
+  Abbreviation = c(
+    "Date",
+    "Count",
+    "Hour",
+    "Temp",
+    "Hum",
+    "Wind",
+    "Visb",
+    "Dew",
+    "Solar",
+    "Rain",
+    "Snow",
+    "Season",
+    "Holiday",
+    "Func"
+  ),
+  Type =c(
+    "year-month-day",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Categorical",
+    "Categorical",
+    "Categorical"
+  ),
+  Measurement =c(
+    "-",
+    "0, 1, 2, ..., 3556",
+    "0, 1, 2, ..., 23",
+    "°C",
+    "%",
+    "m/s",
+    "10m",
+    "°C",
+    "MJ/m2",
+    "mm",
+    "cm",
+    "Autumn, Spring, Summer, Winter",
+    "Holiday, No Holiday",
+    "Yes, No"
+    
+  )
+)
+
+attributes.df %>%
+  kbl(caption = "Description of the attributes", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+```
+
+
+
+### Preparing the data
+
+In this step we will manipulate the dataset in order to match the work done in [@Sathishkumar].
+
+The first thing to do is to visualize the first rows of the dataset.
 
 ```{r}
 bikes.old <- read.csv(file="C:\\Users\\Giacomo\\Desktop\\mml\\SeoulBikeData.csv")
 head(bikes.old)
 ```
 
+As we can see the date is a string, so it is useful for our analysis to convert is to a POSIX date object and then split the Date attribute into the three attributes *day, month and year* and also the categorical attribute *wday*, which represents the day of the week and has values from 0 to 6, where 0 is Sunday and 6 is Saturday.
+
+We print the first few rows to visualize the changes.
 
 ```{r}
 bikes.old$wday <- as.POSIXlt(bikes.old$Date, format = '%d/%m/%Y')$wday
@@ -58,6 +175,11 @@ bikes <- bikes.old %>%
   
 head(bikes)
 ```
+
+Following the work described in [@Sathishkumar], we can now use the wday attribute to generate the *Weekend* binary categorical attribute which has value 0 if the day of the week is one from Monday to Friday and 1 if it is a Sunday or a Saturday.
+
+Here is the **final version** of the dataset with the new columns added to it.
+
 ```{r}
 to_wend <- function(wday){
   if(wday==6 | wday==0){
@@ -71,9 +193,18 @@ bikes$wend = sapply(bikes$wday, to_wend)
 head(bikes)
 ```
 
-the response variable is the hourly rented bike count
+## Normality Assessment
 
-plot the histogram of the response
+The *response* variable is the **Rented Bike Count**. 
+
+As we will see in more detail in the next section, in a linear model the values of the response variable are realizations of a random variable that has a *normal distribution* because it is a linear transformation of unobservable *errors* that we assume normally identically distributed, independent, centered in zero and with the same variance $\sigma^2$.
+
+So in this step we will **assess the normality** of the observations of the response variable by plotting an histogram and a q-q plot of the Rented Bike Count.
+
+In the histogram the y axis represents the number of occurrences of values that belong to the interval defined by the width of the bars (binwidth). We can clearly observe that the empirical distribution of the response variable is highly skewed, so we apply a **logarithmic transformation** to mitigate this issue. 
+
+When we plot the logarithm of the response variable we observe a distribution that looks more "normal" but that is still very far from the ideal case.
+
 ```{r}
 
 resp <- ggplot(data=bikes) + 
@@ -96,40 +227,57 @@ resp_qq_log <- ggplot(data=bikes, aes(sample = log(Count+1)))+
   theme(text = element_text(size=20))+
   stat_qq_line(color="red", alpha=0.7, size=0.5, linetype=2)
   
-ggarrange(resp, resp_log, resp_qq, resp_qq_log, ncol = 2, nrow = 2)
+ggarrange(resp, resp_log, resp_qq, resp_qq_log, ncol = 2, nrow=2)
 ```
 
-the situation improves with the log transformation, but there are many zero values
-```{r}
-bikes$logCount <- log(bikes$Count +1)
-head(bikes)
-```
+Moreover, we can see how the **zero values** of the response variable represent a clear violation of the normal assumption.
 
 
-zero values and func no func
 
-as we can see the zero values of the response variables coincide with the no func factor.
-This way we can eliminate the problem of zero values by filtering out the no func values.
+### Zero values of the response variable
+
+Investigating the issue of the zero values of the response in more detail, we can observe how they coincide with the Non *Functional days*, as stated in the following table.
 ```{r}
 #check out zero values of count
 
 bikes.zero <-subset(bikes, bikes$Count==0)
-print("The amount of zero values of the response variable is: ")
-print(nrow(bikes.zero))
 
 bikes.nofunc <-subset(bikes, bikes$Func=="No")
-print("The amount of rows corresponding to non functional hours is: ")
-print(nrow(bikes.nofunc))
 
 bikes.nfzero <- subset(bikes.zero, bikes.zero$Func=="No")
-print('The amount of rows corresponding to zero values of the response variable whose functional attribute is No: ')
-print(nrow(bikes.nfzero))
+
+zero.df <- data.frame(
+  Event = c(
+    "Zero Values of Count",
+    "Functional Day : NO",
+    "Count=0 AND Func=NO"
+  ),
+  Number = c(
+    nrow(bikes.zero),
+    nrow(bikes.nofunc),
+    nrow(bikes.nfzero)
+  )
+)
+
+zero.df %>%
+  kbl(caption = "Occurrence of Zero Values in relation to Functional Day attribute", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+
 ```
+Filtering out these observations would be helpful for the linear model, but at the same time it would be an invasive operation which is not performed by the paper [@Sathishkumar]. For this reason I carried out the analysis keeping these observations as it was done in the paper and in the end I compared the results with the filtered dataset.
 
+## Correlation between attributes
 
-visualize the data with plots
+We now proceed in analyzing the correlation between predictors. The pair plot from the package [psych](https://cran.r-project.org/web/packages/psych/index.html) is very useful as it allows us to visualize the relationship between the response variable and the predictors, but also between pairs of predictors, while on the diagonal it displays the histogram of each variable.
 
-plot the correlation between quantitative attributes 
+We are analyzing the correlation of the Quantitative attributes and we are using the **Pearson Correlation Coefficient**, which is a measure of the linear correlation between two random variables and consists in the division between the covariance of the two variables and the product of their standard deviations.
+
+\begin{equation}
+    \rho_{X,Y}=\frac{Cov(X,Y)}{\sigma_X\sigma_Y}=\frac{E\big[(X-\mu_X)(Y-\mu_Y)\big]}{\sqrt{E\big[(Y-\mu_Y)^2\big]}\sqrt{E\big[(X-\mu_X)^2\big]}}
+\end{equation}
+
+Where $\mu_X$ and $\mu_Y$ are the expected values of the two random variables and $\sigma_X$ and $\sigma_Y$ are their standard deviations.
+
 
 ```{r}
 
@@ -145,10 +293,58 @@ pairs.panels(bikes.quant,
              )
 ```
 
+From this plot we can observe that the predictor that has the highest correlation with the response variable is the *Temperature*, but also the *Hour of the day* has a significant correlation with the **Bike Count**.
+
+On the other hand we can see that the *Dew Point Temperature* is very highly correlated with the *Temperature*. *Dew point temperature* represents the temperature to which the air needs to be cooled to become saturated with water vapour, and ambient temperature and relative humidity are used for its computation, so we can see where such a high correlation comes from. The correlation with *Humidity* is not as high, but still sizeable. This is also clear from the simple linear regression plot between *Temperature* and *Dew Point Temperature*, in which the regression line fits the observations really well.
+
+Other reasonable observations can be made on the positive correlation between *Temperature* and *Solar Radiation* and the negative correlation between *Solar Radiation* and *Humidity*, the solar radiation is positively correlated with the **Bike Count** and this makes sense since people are more likely to ride a bike on sunny days. It is also funny to see the hours of light portrayed in the regression plot of *Solar* and *Hour*.
+
+Also we can see that the *Snowfall* attribute has little to no correlation with any of the predictors, as does the *Rainfall*, also for these two predictors we can se that their distribution is really concentrated in a narrow interval of values.
+
+The *Visibility* attribute is also scarcely correlated with anything but the *Humidity*, which would be explained by the effects of fog, which is a phenomenon related to humidity.
+
+*Windspeed* is another predictor that is not significantly correlated with any other and has a very low correlation with the response variable as well.
 
 
+## Categorical attributes
 
-average user count by hour of the day 
+The following plot is a useful first description of the attributes of the dataset.
+
+```{r}
+bikes.noday <- subset(bikes, select=-c(day))
+plot_intro(bikes)
+
+```
+This tells us that there are no missing values and describes the percentage of *qualitative* and *quantitative* attributes.
+
+Here we can observed the bar plots for all the categorical attributes of the dataset.
+```{r}
+plot_bar(bikes)
+
+```
+Four (*year, Holiday, Func, wend*) out of our 7 qualitative predictors are binary and all of these 4 present a high imbalance between the 2 factors.
+
+Already from this plot we can start to see how the day of the month is a cumbersome predictor and that it would be impractical to use it in our analysis.
+
+And here we can visually observe a *correlation heatmap* in which the categorical attributes are also displayed
+```{r}
+plot_correlation(bikes.noday)
+```
+
+Correlation is a symmetrical property and this is the reason why the plot is divided into 2 equal parts by the diagonal.
+It is clear how month and Seasons are correlated with Weather features, while the day of the week, the functional day and the Holiday are not.
+
+The year attribute behaves differently than we would think, because only the month of December 2017 is displayed, hence the 100% correlation between those attributes.
+
+
+We also need to point out how overall months and seasons are 100% correlated, because the season can be always inferred from the month. For this reason we are faced with the choice between these two predictors.
+
+
+## Temporal attributes
+
+Our dataset is connoted by the presence of many *temporal attributes*, which presents us the opportunity to plot the response variable in relation to these attributes to better understand its behavior.
+
+The first plot is of the *average hourly user count by hour of the day*
 
 ```{r}
 means <- aggregate(Count ~ Hour, bikes, mean)
@@ -157,9 +353,10 @@ ggplot(means, aes(x=Hour, y = Count))+
   theme(text = element_text(size=20))+
   geom_line(size=1.3, colour="92") + geom_point(size=4, colour="92")
 ```
-average user count by hour across years
+This plot describes the *peak hours* in terms of bike demand, which coincide with rush hours. This means that people commuting to work and back are a considerable demographic of bike sharing users.
 
 
+We have seen how the *year 2017* only amounts to the month of December and this is clear in the plot of the *average hourly user count across years*.
 
 ```{r}
 bikes17 <-subset(bikes, bikes$year=="2017")
@@ -176,23 +373,10 @@ ggplot(means_year, aes(x=Hour, y = Count, colour = year))+
   theme(text = element_text(size=20))+
   geom_line(size=1.3) + geom_point(size=4)
 ```
-we can see that the average hourly count follows the same trend, but the average number is lower for year 2017, this is due to the fact that the dataset contains only the last month of 2017 and 11 months of 2018
-as we can see the total number of rows for year 2017 is much lower than 2018. Another important difference is that the month of December that is the only one for 2017, is one of the coldest of the year and from the correlation measures we observed how the count and the temperature are positively correlated, so lower temperature results in lower count, we can understand this aspect better if we display the average hourly count for the year 2017 and the month of January of 2018. 
-
-Because of the previous observations I will exclude the year as a feature for the regression model.
-
-count the total number of rows for each year
+We can see that the average hourly count follows the same trend, but the average number is lower for year 2017.
+The total number of rows for year 2017 is much lower than 2018 (as we observed in the bar plot of the categorical attributes) and also  the month of December is one of the coldest of the year and from the correlation measures we observed how lower temperature results in lower count. The picture becomes clearer if we display the average hourly count for the year 2017 and the month of January of 2018.
 
 ```{r}
-
-tot17 <- nrow(bikes17)
-tot18 <- nrow(bikes18)
-
-
-tot <- c(tot17, tot18)
-year <- c("2017", "2018")
-
-tot_year <- data.frame(tot, year)
 
 bikes18_jan <-subset(bikes, bikes$year=="2018" & bikes$month=="01")
 
@@ -200,25 +384,16 @@ means18_jan <- aggregate(Count ~ Hour, bikes18_jan, mean)
 means18_jan$year <- "2018"
 means_y2 <- rbind(means17, means18_jan)
 
-ggplot(tot_year, aes(x=year, y=tot, label=tot))+
-  geom_bar(stat="identity", fill="92")+
-  labs(y="Total number of rows", x="Year")+
-  theme(text = element_text(size=20))+
-  geom_text(position=position_dodge(1), vjust=-0.5, size=8)
-
-
-  
-
 ```
-plot the average hourly count for the month of january 2018 and the month of december 2017
-here we can see the year itself does not contribute to the response as much as the month
 
 ```{r}
 ggplot(means_y2, aes(x=Hour, y = Count, colour = year))+
   theme(text = element_text(size=20))+
   geom_line(size=1.3) + geom_point(size=4)
 ```
-plot average count by month
+
+
+We now plot the *average user count by month* using a bar plot, that shows how the coldest months present the lowest count.
 ```{r}
 means_month <- aggregate(Count~month, bikes, mean)
 
@@ -228,10 +403,10 @@ ggplot(means_month, aes(x=month, y=Count, fill=month))+
   labs(y="Average Count", x="Month")
 
 ```
-plot average hourly count across months
+
+Now we plot the *average hourly user count across months* and our purpose is to visualize any patterns that may make us consider to use the month attribute in our analysis.
 
 
-we can observe that the hourly trend is similar across months, what changes is obviously the actual count.
 ```{r}
 bikes.jan <-subset(bikes, bikes$month=="01")
 bikes.feb <-subset(bikes, bikes$month=="02")
@@ -282,7 +457,9 @@ ggplot(means_month, aes(x=Hour, y = Count, colour = month))+
   geom_line(size=1.3) + geom_point(size=4)
 ```
 
-plot average user count by hour across seasons
+We can see that the trend is really similar, the only thing that changes is the actual count. An interesting observation is that in the month of August and July the hours from 11am to 3pm present a lower count, presumably because of temperatures that are too high.
+
+Now it is time to repeat this plot for the seasons, which is the attribute that we could use instead of the month.
 
 ```{r}
 bikes.winter <-subset(bikes, bikes$Seasons=="Winter")
@@ -307,15 +484,14 @@ ggplot(means_seasons, aes(x=Hour, y = Count, colour = Seasons))+
   theme(text = element_text(size=20))+
   geom_line(size=1.3) + geom_point(size=4)
 ```
+As expected plotting the *average hourly user count across seasons* gives us very similar information as the month, while being a lot easier to work with because of the lower number of factors.
+
+For this reason in our analysis we will ignore the month and use the season instead.
 
 
+We now plot the *hourly average user count across workdays and weekends*.
 
 
-
-
-plot average user count by hour across week days and week end
-
-we can see hour the spikes corresponding to rush hours are no longer present, because people are not commuting to work on weekends, while the count is higher during the night and in the hours during which people are usually working (from 10 to 17). From the paper attached to the dataset I observed the graph showing the average users count by hour across all days of the week and observed how all weekdays have very similar hourly counts and those of saturday and sunday are very close to each other, so I concluded that having only two factors instead of seven was the better choice.
 ```{r}
 bikes.wday <-subset(bikes, bikes$wend==0)
 bikes.wend <-subset(bikes, bikes$wend==1)
@@ -332,30 +508,29 @@ ggplot(means_wend, aes(x=Hour, y = Count, colour = wend))+
   geom_line(size=1.3) + geom_point(size=4)
 ```
 
+We can see hour the spikes corresponding to rush hours are not present during weekends, because people are not commuting to work, while the count is higher during the night and in the hours during which people are usually working (from 10 to 17).
 
+It is redundant to plot the average hourly user count across the seven days of the week, because the situation would be the same as the months and the seasons.
 
-```{r}
-bikes.noday <- subset(bikes, select=-c(day))
-plot_intro(bikes)
-plot_bar(bikes)
-plot_correlation(bikes.noday)
-
-```
-
-
-
-
-
+Here it would be reasonable to exclude the weekdays from the analysis as we did for the months, but in the paper [@Sathishkumar] that we are using as a guide in our analysis the weekdays are kept as a predictor and from the next sections we will observe how some of their p-values (spoiler alert) are pretty low which signifies their importance. So I will be keeping them and we will experiment different combination of predictors in which some of them are excluded further down the line.
 
 ## Feature importance
  
-use the recursive feature elimination algorithm in order to evaluate how rmse changes when certain features are removed, thus ranking the features by their importance in predicting the user count.
+**Recursive Feature Elimination**, or shortly RFE, is a widely used algorithm for selecting features that are most relevant in predicting the target variable in a predictive model. 
 
-we will use log count as the response and ignore the count attribute in this step.
+RFE applies a *backward selection process* to find the optimal combination of features.
+First, it builds a model based on all features and calculates the importance of each feature in the model.
+Then, it rank-orders the features and removes the ones with the least importance iteratively, based on model evaluation metrics (e.g., RMSE). 
+
+This process continues until a smaller subset of features is retained in the model. Technically, RFE can still keep all (or most) of the features in the final model.
+
+In order to proceed we use *dummy columns* to represent *qualitative attributes* with more than 2 factors and such operation increases the number of overall variables to 37 including the months, 25 without them.
+
+We show the first rows of the *modified dataset*.
 
 ```{r}
 
-bikes.log <- subset(bikes, select = -c(Count, day))
+bikes.log <- subset(bikes, select = -c(day))
 
 #save categorical features as factors
 
@@ -364,17 +539,13 @@ bikes.log <- bikes.log %>%
             as.factor)
 
 bikes.dummies <- dummy_cols(bikes.log, 
-                            select_columns = c("month", "year", "Seasons", "Holiday", "Func", "wday", "wend"),
+                            select_columns = c("month", "year", "Seasons", "wday"),
                             remove_selected_columns = TRUE
                             )
 #rename columns to better readability
 
 bikes.dummies <- bikes.dummies %>%
   rename(
-    Func = Func_Yes,
-    No_Func = Func_No,
-    Holiday = Holiday_Holiday,
-    No_Holiday = `Holiday_No Holiday`,
     Winter = Seasons_Winter,
     Spring = Seasons_Spring,
     Summer = Seasons_Summer,
@@ -398,34 +569,35 @@ bikes.dummies <- bikes.dummies %>%
     Friday = wday_5,
     Saturday = wday_6,
     Sunday = wday_0,
-    Weekend = wend_1,
-    Weekday = wend_0
+    Weekend = wend
     
   )
 
-#print(ncol(bikes.dummies))
-
+head(bikes.dummies)
 ```
 
 
-recursive feature elimination
+We can now perform the recursive feature elimination. Unfortunately the library function that is supposed to perform the feature elimination using a linear model has a bug that kept me from using it. 
+
+Still it will be interesting to see what is the feature importance when using a *random forest regression model* (another spoiler).
 
 
-```{r}
+```{r, warning=FALSE}
 control <- rfeControl(functions = rfFuncs, #random forest, linear model implementation has a bug
                       method = "cv", #cross validation
-                      number = 10 # 10-fold cross validation
+                      number = 2 # 2-fold cross validation
                       )
 
 #define attribute variables and response variable
 
-x <- subset(bikes.dummies, select = -c(logCount))
-y <- bikes.dummies$logCount
+x <- subset(bikes.dummies, select = -c(Count, January, February, March, April, May, June, July, August, September, October, November, December))
+
+y <- log(bikes.dummies$Count+1)
 
 #randomly split the dataset into train and test sets
 
 set.seed(3456)
-inTrain <- createDataPartition(y, p= .8, list = FALSE)
+inTrain <- createDataPartition(y, p= .75, list = FALSE)
 
 x_train <- x[inTrain, ]
 x_test  <- x[-inTrain, ]
@@ -433,30 +605,25 @@ x_test  <- x[-inTrain, ]
 y_train <- y[inTrain]
 y_test  <- y[-inTrain]
 
-
 y_train <- as.matrix(y_train)
-
-head(x_train)
-
 
 
 result_rfe <- rfe(x = x_train,
                   y = y_train,
-                  sizes = c(1:40),
+                  sizes = c(1:12, 14, 20, 25),
                   rfeControl = control,
                   verbose=TRUE,
-                  allowParallel=FALSE
+                  allowParallel=TRUE
                   )
 
-print(result_rfe, row.names = FALSE)
 ```
 
 
 
-rank features by importance 
+After running the algorithm we can visualize the various attributes ranked by *importance* with a bar plot.
 
 ```{r}
-size = 40
+size = 25
 
 variables <- result_rfe$variables
 
@@ -470,11 +637,18 @@ var_importance$Variable <- as.data.frame(var_set[var_order, ])$Group.1
 var_importance$Importance <- as.data.frame(var_set[var_order, ])$x
 var_importance <- subset(var_importance, select = -c(Group.1, x))
 
-print(var_importance)
+```
+```{r}
+var_importance$Variable <- reorder(var_importance$Variable, -var_importance$Importance)
+ggplot(data = var_importance, aes(x=Variable, y=Importance))+
+  geom_bar(stat="identity", fill = "92")+
+  theme(text = element_text(size=20))+
+  theme(axis.text.x=element_text(angle=75,hjust=1,vjust=1))
 ```
 
+Because of the strict relationship between *Functional day* and zero values, in the contest of a decision tree based model, the attribute *Func* is the most important. It is strange to see that *Humidity* and *Rain* are more important than *Temperature* according to the algorithm.
 
-plot rfe output
+Finally we can plot the decrease in the RMSE as the number of parameters increase.
 
 ```{r}
 ggplot(data = result_rfe)+
@@ -483,69 +657,1028 @@ ggplot(data = result_rfe)+
   geom_point(size=4, col="92")
 ```
 
-```{r}
-var_importance$Variable <- reorder(var_importance$Variable, -var_importance$Importance)
-ggplot(data = var_importance, aes(x=Variable, y=Importance))+
-  geom_bar(stat="identity", fill = "92")+
-  theme(text = element_text(size=20))+
-  theme(axis.text.x=element_text(angle=75,hjust=1,vjust=1))
-```
-```{r}
-print(predictors(result_rfe))
-```
-
+The difference from 1 predictor to 12 is sizable, while the difference between 12 and 25 is almost negligible.
 
 
 # Linear Models
 
+We will start our analysis with a linear model, in particular **Linear Regression**, which represents a declination of the **General Linear Model**.
+
 ## The General Linear Model
 
-## Least Square Estimates
+\begin{equation}
+    \begin{bmatrix} 
+        Y_1\\ 
+        Y_2\\
+        \vdots\\ 
+        Y_n 
+    \end{bmatrix}  = 
+    \begin{bmatrix}
+        X_{11}&X_{12}&\cdots&X_{1p}\\
+        X_{21}&x_{22}&\cdots&X_{1p}\\
+        \vdots&\vdots&\ddots&\vdots\\
+        X_{n1}&X_{n2}&\cdots&X_{np}
+    \end{bmatrix}
+    \cdot
+    \begin{bmatrix}
+        \beta_0\\
+        \beta_1\\
+        \vdots\\
+        \beta_{p-1}
+    \end{bmatrix} +
+    \begin{bmatrix}
+        \epsilon_1\\
+        \epsilon_2\\
+        \vdots\\
+        \epsilon_n
+    \end{bmatrix}
+\end{equation}
 
-## Metrics
+
+The **General Linear Model** describes the *stochastic relationship* between the response variable and a set of predictors. In particular the response variable is seen as a *linear combination* of known matrix of predictors and a vector of unknown, non observable parameters plus a vector of random errors representing natural variability.
+
+\begin{equation}
+  \boldsymbol{Y} = \boldsymbol{X\beta}+\boldsymbol{\epsilon}
+\end{equation}
+
+In the formula above we observe the following elements:
+
+- $\boldsymbol{Y}$ is a vector of $n \times 1$ observable random variables
+- $\boldsymbol{X}$ is a matrix of $n \times p$ known numbers, the predictors, which are the inputs to the model
+- $\boldsymbol{\beta}$ is a vector of $p \times 1$ unknown non observable parameters which are the main object of inference
+- $\boldsymbol{\epsilon}$ is a vector of non observable errors, which are identically distributed random variables such that: $\epsilon_i \sim N(0, \sigma^2)$
+- $\boldsymbol{n}$ is the number of observations
+- $\boldsymbol{p}$ is the number of predictors
+
+For a single observation we have:
+
+\begin{equation}
+  Y_i = \sum_{n=p}^{j=1} X_{i, j}\beta_j +\epsilon_i
+\end{equation}
+
+We know that the *errors* $\boldsymbol{\epsilon}$ are :
+
+- are normally distributed
+- are centered in zero
+- have the same variance
+- are uncorrelated
+
+Because the $\boldsymbol{Y's}$ are a linear transformation of the errors they are themselves normal, with the same variance of the error, but with the mean that changes according to the predictors. 
+
+For a single observation we have:
+
+\begin{equation}
+  Y_i \sim N(\sum_{n=p}^{j=1} X_{i, j}\beta_j, \sigma^2)
+\end{equation}
+
+### Maximum Likelihood in the General Linear Model
+
+In the presence of a statistical model we can write a *likelihood* and maximize such likelihood in order to obtain the *estimates* of the unknown parameters $\boldsymbol{\beta}$
+
+We can formulate the likelihood as:
+
+\begin{equation}
+  \mathcal{L}(\beta, \sigma^2; Y_1, ..., Y_n) = \prod_{i=1}^{n} \frac{1}{\sqrt{2\pi\sigma^2}} e^{-\frac{1}{2\sigma^2}(Y_i - E(Y_i))^2} = \prod_{i=1}^{n} \frac{1}{\sqrt{2\pi\sigma^2}} e^{-\frac{1}{2\sigma^2}(Y_i - \sum_{n=p}^{j=1} X_{i, j}\beta_j)^2} 
+\end{equation}
+
+which can be reduced to the expression:
+
+\begin{equation}
+  \mathcal{L}(\beta, \sigma^2; Y_1, ..., Y_n) = (2\pi \sigma^2)^{-\frac{n}{2}} e^{-\frac{1}{2\sigma^2}\Vert \boldsymbol{Y}-\boldsymbol{X\beta}\Vert^2}
+\end{equation}
+
+From this formulation we deduct that the likelihood is inversely proportional to the squared norm of the difference between the vector of $Y$ realizations of random variables and the vector of their expected values $X\boldsymbol{\beta}$ : $\Vert Y - X\boldsymbol{\beta}\Vert^2$
+
+Because of this, the **Maximum Likelihood Estimation** problem can be transformed into the **Least Squares Problem**:
+\begin{equation}
+  \min_{\beta}\Vert \boldsymbol{Y}-\boldsymbol{X\beta}\Vert^2 
+\end{equation}
+
+Graphically, this problem corresponds to finding the vector closest to $Y$ onto the *linear subspace* spanned by the columns of $X$, which is the orthogonal projection of $Y$ onto the span of $X$
+
+We can rewrite the problem as:
+\begin{equation}
+  \min_{\beta}(Y'Y - 2X'YX\beta + \beta'X'X\beta) 
+\end{equation}
+
+And then we can set the first derivative (obtained through *matrix differentiation*) to zero in order to find the minimum and we obtain the result:
+
+\begin{equation}
+  X'X\beta = X'Y
+\end{equation}
+
+and this allows us to obtain the vector of estimators $\hat{\beta}$ for the vector of unknown parameters $\beta$ in the case in which the matrix $X'X$ is invertible:
+
+\begin{equation}
+  \hat{\beta} = (X'X)^{-1}X'Y
+\end{equation}
+
+Following a *least squares procedure*, we can also obtain the estimator $\hat{\sigma}^2$, which is:
+
+\begin{equation}
+  \hat{\sigma}^2 = \frac{\sum(Y_i - \hat{Y_i})^2}{n}=\frac{e'e}{n}
+\end{equation}
+
+The average of squared residuals is an *unbiased estimator* for $\sigma^2$.
+
 
 ## The Null Model
+
+The **Null Model** is a special case of the *General Linear Model* in which the design matrix $X$ is a column vector of ones:
+
+\begin{equation}
+  \begin{bmatrix} 
+    Y_1\\ 
+    Y_2\\
+    \vdots\\ 
+    Y_n 
+  \end{bmatrix}  = 
+  \begin{bmatrix}
+    1\\
+    1\\
+    \vdots\\
+    1
+  \end{bmatrix}
+  \cdot
+  \begin{matrix}
+    \beta_0\\
+    \end{matrix} +
+    \begin{bmatrix}
+    \epsilon_1\\
+    \epsilon_2\\
+    \vdots\\
+    \epsilon_n
+  \end{bmatrix}
+\end{equation}
+
+By applying the *least square solution* to this particular model we get:
+
+\begin{equation}
+    \hat{\beta} = (X'X)^{-1}\cdot X'Y = \frac{\sum_{i=1}^n Y_i}{n}=\overline{Y}
+\end{equation}
+
+As we can see the vector of estimators of $\beta$ is made of $p$ identical values equal to the mean of the samples $Y$.
+
+Before fitting the null model we split the dataset into a *training* and a *testing* set (75%-25%).
 ```{r}
-null.lm <- lm(logCount ~ 1, bikes)
+#randomly split the dataset into train and test sets using caret package
+
+set.seed(3456)
+inTrain <- createDataPartition(y, p= .75, list = FALSE)
+
+bikes.train <- bikes.dummies[inTrain, ]
+bikes.test <- bikes.dummies[-inTrain, ]
+
+traintest.df <- data.frame(
+  Dataset = c(
+    "Training Dataset",
+    "Testing Dataset"
+  ),
+  Observations = c(
+    nrow(bikes.train),
+    nrow(bikes.test)
+  )
+)
+
+traintest.df %>%
+  kbl(caption = "Training and Testing datasets", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+
+```
+
+
+```{r}
+null.lm <- lm(log(Count+1) ~ 1, bikes.train)
 summary(null.lm)
+```
+
+As we can see from the summary, there is *only one predictor*, which is the *Intercept* and whose value is equal to the average of the values of the observations of the response variable.
+
+```{r}
+mean_y <- mean(log(bikes.train$Count+1))
+print("The mean of the response observations is: ")
+print(mean_y)
 ```
 
 
 ## Simple Linear Regression
+The next step after the null model is **Simple Linear Regression**.
+In this case there are *2 predictors*, the design matrix $X$ has 2 columns, one of which is a column of ones. The second column corresponds to an attribute, in our case I choose the *Temperature* instead of the Hour of the day, which was the most important feature according to rfe, because the Hour presents only integer values and it was cumbersome to plot. Moreover, the Temperature was the attribute with the highest *correlation* with the response variable *Count*.
+
+\begin{equation}
+  \begin{bmatrix} 
+    Y_1\\ 
+    Y_2\\
+    \vdots\\ 
+    Y_n 
+  \end{bmatrix}  = 
+  \begin{bmatrix}
+    1&X_1\\
+    1&X_2\\
+    \vdots&\vdots\\
+    1&X_n
+  \end{bmatrix}
+  \cdot
+  \begin{bmatrix}
+    \beta_0\\
+    \beta_1
+  \end{bmatrix} +
+  \begin{bmatrix}
+    \epsilon_1\\
+    \epsilon_2\\
+    \vdots\\
+    \epsilon_n
+  \end{bmatrix}
+\end{equation}
+
+
+By applying the *least squares solution* to this particular model we get:
+
+\begin{equation}
+    \hat{\beta} = \begin{pmatrix}
+    \hat{\beta_0}\\
+    \hat{\beta_1}
+    \end{pmatrix}=
+    (X'X)^{-1}X'Y
+\end{equation}
+
+the solution of which is the following system of equations:
+
+\begin{equation}
+    \begin{cases}
+     \hat{\beta_0} = \overline{Y}-\hat{\beta_1}\overline{X}\\
+     \hat{\beta_1} = \frac{\sum(X_i-\overline{X})Y_i}{\sum(X_i-\overline{X})^2}=\frac{\sum(X_i-\overline{X})\sum(Y_i-\overline{Y})}{\sum(X_i-\overline{X})^2}
+    \end{cases}
+\end{equation}
+
+$\hat{\beta_0}$ is the intercept, while $\hat{\beta_1}$ is the slope.
+
+We can now plot the regression line and take a look at the *regression line* described by these parameters:
 ```{r}
-simple.lm <- lm(logCount ~ Hour, data = bikes.log)
-summary(simple.lm)
+simple.lm <- lm(log(Count+1) ~ Temp, data = bikes.train)
 
-
-```
-
-Plot the regression line
-```{r}
 coeff <- coefficients(simple.lm)
 
-ggplot(bikes.log, aes(x=Hour, y=logCount))+
+ggplot(bikes.log, aes(x=Temp, y=log(Count+1)))+
   geom_point(size=3, color='88')+
   theme(text = element_text(size=20))+
-  geom_abline(slope = coeff[2], intercept = coeff[1], size=2, color='92')
+  geom_abline(slope = coeff[2], intercept = coeff[1], size=2, color='92')+
+  xlab("Temperature")+
+  ylab("logarithm of the response")
 ```
+
+We can now analyze the output of the *summary* function
+```{r}
+summary(simple.lm)
+```
+
+In order to fully comprehend this information we need to introduce some theorical concepts.
+When we define $\hat{\beta}$ as:
+
+\begin{equation}
+  \hat{\beta} = (X'X)^{-1}X'Y
+\end{equation}
+
+we can see that it is a linear combination of the $Y$ values, so we can say that the estimators $\hat{\beta}$ are *random variables* and we can define their *sampling distribution*. Since $Y$ is multivariate normal, $\hat{\beta}$ is multivariate normal.
+
+For a single element $\beta_i$ we have:
+
+\begin{equation}
+    \hat{\beta_i} \sim Normal(\beta_i, \sigma^2(X'X)_{i+1,i+1}^{-1}) 
+\end{equation}
+
+We can perform *standardization* in order to get a normal distribution centered in zero with variance equal to 1:
+
+\begin{equation}
+    \frac{\hat{\beta_i}-\beta_i}{\sqrt{\sigma^2(X'X)_{i+1, i+1}^{-1}}} \sim Normal(0, 1)
+\end{equation}
+
+We normally do not know $\sigma^2$, but we have already derived an *unbiased estimate* for it, which is the *Mean Squared Residual*:
+
+\begin{equation}
+  \hat{\sigma}^2 =\frac{e'e}{n}
+\end{equation}
+
+We can substitute the estimate for $\sigma^2$ in the previous expression and we get:
+
+\begin{equation}
+    \frac{\hat{\beta_i}-\beta_i}{\sqrt{\frac{e'e}{n-p}(X'X)_{i+1, i+1}^{-1}}} = \frac{\hat{\beta_i}-\beta_i}{\sqrt{\frac{e'e}{(n-p)}\frac{\sigma^2}{\sigma^2}(X'X)_{i+1, i+1}^{-1}}}
+\end{equation}
+
+from this formulation we can see how $\frac{e'e}{(n-p)\sigma^2}$ is a $\frac{\chi^2(n-p)}{n-p}$ distribution, which means that we have a normal distribution divided by a $\chi^2$ distribution which results in a **t-distribution**.
+
+A t-distribution can be *"inverted"* in order to compute a *confidence interval*, so, for a single $\beta_i$ we have:
+
+\begin{equation}
+    \beta_i \pm t_{\frac{\alpha}{2}}(n-p)\cdot \sqrt{\frac{e'e}{n-p}(X'X)_{i+1, i+1}^{-1}}
+\end{equation}
+
+which is a $[(1-\alpha)\cdot 100]\%$ *confidence interval* for the single $\beta_i$.
+
+This is useful to understand the **t-value** displayed next to the attribute name in the summary of the linear model.
+
+As a matter of fact, we can use the t-distribution for *hypothesis testing*, the R library in this case performs a *null-hypothesis* test for each attribute. In doing so it generates a t-value that correspond to the null case ($\hat{\beta_0}=1, \hat{\beta_1}=0$):
+
+\begin{equation}
+    t_{obs} = \left.\frac{\hat{\beta_i}-\beta_i}{\sqrt{\sigma^2(X'X)_{i+1, i+1}^{-1}}}\right|_{\beta_i=0} =
+    \frac{\hat{\beta_i}}{\sqrt{\sigma^2(X'X)_{i+1, i+1}^{-1}}}
+\end{equation}
+
+We then decide if we want to reject the null hypothesis based on the value of this *t-value*, in particular we reject the null hypothesis if: $t_{obs} > t_{\frac{\alpha}{2}}(n-p)$ or if $t_{obs} < - t_{\frac{\alpha}{2}}(n-p)$. So if the *t-value* is either big or small, we reject the null hypothesis. In order to assess how far from zero the *t-value* is we need an auxiliary value: the **double sided p-value**, which represents the *double tail area* of the $t_{obs}$ distribution. If the *p-value* is very small, we can reject the null hypothesis.
+
+In our case, the *p-value* for the *Temperature* attribute is very small, so we can clearly reject the null hypothesis.
+
+There are also other statistics displayed in the summary.
+
+There is the *Residual Standard Error*, which is $\sqrt{\frac{e'e}{n-p}}$.
+
+The $\boldsymbol{R^2}$ value, also known as *Coefficient of Determination*, is the normalized difference between the sum of squared residuals of the null model and the sum of squared residual of the full model. The sum of squared residuals of the null model is going to be higher because there are less degrees of freedom.
+
+\begin{equation}
+    \boldsymbol{R^2}=\frac{e_0'e_0 - e'e}{e_0'e_0} = \frac{\sum(\hat{Y_i}-\overline{Y_i})^2}{\sum(Y_i-\overline{Y_i})^2}
+\end{equation}
+
+The problem with this approach is that the value of the coefficient of determination is going to increase with the number of parameters even if those parameters do not influence the response in any way. For this reason the  $Adjusted\:\boldsymbol{R^2}$ is introduced:
+
+\begin{equation}
+    Adjusted\:\boldsymbol{R^2} = 1 - (1-\boldsymbol{R^2})\cdot\frac{n-1}{n-p-1}
+\end{equation}
+
+At the end of the summary the result of the *all-or-nothing test* is displayed.
+This is also called the *Global Test* and its purpose is to compare the projection of $Y$ onto the span of X with the projection of $Y$ onto the space of the null model, which is composed by vectors whose components are all equal, as the fitted values in the case of the null model are all the same and equal to the mean of the samples.
+
+An **F-statistic** is generated using the residuals  computed from the fitted values of the null model $\boldsymbol{e_0}$ and the residuals computed from the fitted values of the full model $\boldsymbol{e}$:
+
+\begin{equation}
+    \frac{e_0'e_0 - e'e}{p-1}\cdot\frac{1}{\frac{e'e}{n-p}} \sim F(p-1, n-p)
+\end{equation}
+
+We reject the null model if the difference between the mean squared residuals of the two models is too large and in order to assess this value we use once again the *p-value*, if it is very small, we can reject the null model.
 
 
 ## Multiple Regression
 
-## Complete Model
+### Complete Model
+The following model uses every attribute, except of the *day* of the month and the *month*, to predict the response.
+
+Categorical attributes with more than 2 layers have been divided into *dummy variables*, one variable for each layer. It is important *not* to use all of the variables related to one factor, because in that case the columns that represent those variables in the design matrix would be *linearly dependent* and that would mean that the matrix $X'X$ would not be invertible. For this reason for each factor we exclude one layer when fitting the models. The *month* is not included because it created a linear dependence with the *Seasons*.
 ```{r}
-complete.lm <- lm(logCount ~ ., data = bikes.log)
+complete.lm <- lm(log(Count+1) ~ Hour+Temp+Hum+Wind+Visibility+Dew+Solar+Rain+Snow+Autumn+Spring+Winter+Holiday+Func+Weekend+Monday+Tuesday+ Wednesday+Thursday+Sunday+year_2018, data = bikes.train)
 summary(complete.lm)
+```
+From the summary we can observe some interesting facts. *Wind* and *Visibility* attributes have a rather high *p-value*, which means that they do not influence the response as much when considering all the other predictors.
+Other predictors that share this behavior are *Solar* and *Snow*, while we expected the weekdays *Tuesday, Wednesday, Thursday* not to be very useful in the estimation of the response.
+
+Of course the null hypotesis is rejected, since the *p-value* of the *global test* is really small.
+
+To understand the difference in performance between *simple linear regression* and *multiple linear regression* we can perform the **ANOVA** test to the complete and simple linear models.
+```{r}
+print(anova(simple.lm, complete.lm))
+```
+The ANOVA test is used to compare *nested models*, it is a test based on an *F-statistic* and by evaluating the *p-value* we can reject or accept the hypotesis that the smaller model is as good as the complete model. In our case we can see how the *p-value* is yet again very small, so we can conclude that the additional predictors presented in the complete model make an actual difference in the estimation of the response value.
+
+
+### Smaller Models
+
+The idea of this step is to identify a subset of attributes that allows us to achieve performance that is close to the complete model, without using the full set of features. 
+The reference paper [@Sathishkumar] identifies 4 subsets: 
+```{r}
+subsetPaper.df <- data.frame(
+  Subset = c(
+    "No Temperature",
+    "No Weather Data",
+    "No Categorical Attributes",
+    "No Snow, Fri, Wed, Tue, Thu"
+  ),
+  Features = c(
+    "Hour, Hum, Wind, Visib, Dew, Solar, Rain, Snow, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Tue, Wed, Thu, Fri, Sat",
+    "Hour, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Tue, Wed, Thu, Fri, Sat",
+    "Hour, Temp, Hum, Wind, Visib, Dew, Solar, Rain, Snow",
+    "Hour, Hum, Wind, Visib, Dew, Solar, Rain, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Sat"
+  )
+)
+
+subsetPaper.df %>%
+  kbl(caption = "Subsets used in the reference paper", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+```
+
+I find these subsets to be limiting when searching for the optimal set of parameters, so in this section my analysis will differ from that of the paper.
+I will still consider 3 of the 4 datasets presented in the paper, but I will add two subsets, one larger and one smaller. The parameters of the larger model have been chosen following the *recursive feature elimination* carried out in the previous section, while the values of the smaller model have been chosen by eliminating the useless features from the complete model.
+
+```{r}
+subsets.df <- data.frame(
+  Subset = c(
+    "Complete",
+    "No Weather Data",
+    "No Categorical Attributes",
+    "No Snow, Fri, Wed, Tue, Thu",
+    "RFE large",
+    "RFE compact"
+  ),
+  Abbreviation =c(
+    "complete",
+    "no_w",
+    "no_cat",
+    "paper",
+    "rfe",
+    "small"
+  ),
+  Features = c(
+    "Hour, Temp, Hum, Wind, Visib, Dew, Solar, Rain, Snow, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Tue, Wed, Thu, Fri, Sat, Year2017, Year2018",
+    "Hour, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Tue, Wed, Thu, Fri, Sat",
+    "Hour, Temp, Hum, Wind, Visib, Dew, Solar, Rain, Snow",
+    "Hour, Temp, Hum, Wind, Visib, Dew, Solar, Rain, Autumn, Spring, Summer, Winter, Holiday, Func, Weekend, Sun, Mon, Sat",
+    "Hour, Temp, Hum, Wind, Visib, Dew, Solar, Rain, Snow, Autumn, Spring, Winter, Holiday, Func, Weekend, Sun, Sat",
+    "Hour, Temp, Hum, Holiday, Rain, Dew, Autumn, Spring, Winter, Func, Weekend, Holiday, Sunday, year_2018"
+  ),
+  Predictors = c(
+    "21",
+    "12",
+    "9",
+    "16",
+    "16",
+    "14"
+  )
+  
+)
+
+subsets.df %>%
+  kbl(caption = "Subsets used in the analysis", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
 ```
 
 
-## Smaller Models
 
-## ANOVA and AIC
+## Testing
 
-## Residuals
+This is the part in which we compare different *metrics* computed off our models in order to find the most adequate for the task.
 
-# Random Forest Regression
+We have already seen the statistics presented in the summary and we now introduce some metrics that can be computed from the predictions of the models on test data that is separate from the training data on which the models were fitted.
+
+### Metrics
+
+The use of a test set means that there is a new matrix $X_f$ which contains a number of rows equal to the number of observations of the test set and a number of columns equal to $p$, since the number of predictors stays the same. Also the vector of *estimates* of the parameters $\hat{\beta}$ is the same that was computed on the test set. 
+Of course we assume that the new observations are similar to the past ones.
+By multiplying the estimates of the parameters $\hat{\beta}$ with the new matrix of predictors $X_f$ we obtain a vector of predictions of the response value $\hat{Y_f}$.
+
+\begin{equation}
+    \hat{Y_f} = X_f\cdot \hat{\beta}
+\end{equation}
+
+We can see that $X_f\hat{\beta}$ is a vector of *random variables* and their *sampling distribution* is the following:
+
+\begin{equation}
+    X_f\hat{\beta} \sim N(X_f\beta, X_f\sigma^2(X'X)^{-1}X_f')
+\end{equation}
+
+By comparing this predictions with the actual value of the response of the test set $Y_f$ we get a new vector of **residuals**, which are the *observable* counterpart of the errors.
+
+\begin{equation}
+    \boldsymbol{e_f}=Y_f-\hat{Y_f}=Y_f-X_f\cdot \hat{\beta}
+\end{equation}
+
+We can see that the residuals are a linear combination of $Y_f$ and $X_f\hat{\beta}$, so we can obtain their *sampling distribution* :
+
+\begin{equation}
+    \boldsymbol{e_f}=Y_f-X_f\cdot \hat{\beta} \sim N(0, \sigma^2(1+X_f(X'X)^{-1}X_f'))
+\end{equation}
+
+The following metrics use these residuals to evaluate the performance of the models.
+
+The *Mean Absolute Error* (**MAE**) is computed as follows:
+
+\begin{equation}
+    MAE = \frac{\sum_{i=1}^{n}{|Y_i - \hat{Y_i}|}}{n}
+\end{equation}
+
+The *Root Mean Square Error* (**RMSE**) is computed as follows:
+
+\begin{equation}
+    RMSE=\sqrt\frac{\sum_{i=1}^{n}{(Y_i - \hat{Y_i})^2}}{n}
+\end{equation}
+
+In both cases a lower value indicates a better prediction.
+
+```{r}
+mse <- function(predicted, actual) {
+  mse <- mean((actual - predicted) ^ 2)
+  return(mse)
+}
+
+rmse <- function(predicted, actual) {
+  mse <- mse(predicted, actual)
+  rmse <- sqrt(mse)
+  return(rmse)
+}
+
+mae <- function(predicted, actual){
+  mae <- mean(abs(predicted-actual)) 
+  return(mae)
+}
+```
+
+It is also worth mentioning another test useful to evaluate the quality of a model.
+The **Akaike's Information Criterion** can be used to assign a score to a model based on a trade-off between the model complexity and the model fit. The AIC takes into consideration the number of parameters $p$, in order to prefer models with *lower complexity* and the logarithm of the maximized likelihood $log(\mathcal{\hat{L}})$, as a measure of the *fitness* of the model:
+
+\begin{equation}
+    AIC = 2(p+1) - 2log(\mathcal{\hat{L}})
+\end{equation}
+
+As we can see from the formula, the lower the AIC, the better the model. Through this metric we can now compare models of different sized that are not necessarily nested, as it was the case for the *ANOVA* test.
+
+
+### Results
+
+we now proceed to fitting the models on the *train* set and we evaluate their performance on the *test* set.
+
+```{r}
+
+# generate the linear models corresponding to the subsets
+
+no_w.lm <- lm(log(Count+1) ~ Hour+Spring+Autumn+Winter+Holiday+Weekend+Func+Tuesday+Wednesday+Thursday+Friday+Saturday, data = bikes.train)
+no_cat.lm <- lm(log(Count+1) ~ Hour+Temp+Hum+Wind+Visibility+Dew+Solar+Rain+Snow, data = bikes.train)
+paper.lm <- lm(log(Count+1) ~ Hour+Temp+Hum+Wind+Visibility+Dew+Solar+Rain+Autumn+Spring+Winter+Holiday+Func+Weekend+Sunday+Monday, data = bikes.train)
+rfe_big.lm <- lm(log(Count+1) ~ Hour+Temp+Hum+Wind+Visibility+Dew+Solar+Rain+Snow+Autumn+Spring+Winter+Holiday+Func+Weekend+Sunday, data = bikes.train)
+small.lm <- lm(log(Count+1) ~ Hour+Temp+Dew+Hum+Rain+Autumn+Spring+Winter+Holiday+Func+Weekend+Monday+Sunday+year_2018, data = bikes.train)
+
+#get model predictions on the test set
+
+simple.predicted <- exp(predict(simple.lm, bikes.test, type="response")) - 1
+simple.predicted[simple.predicted<0] <- 0
+simple.mae <- mae(simple.predicted, bikes.test$Count) %>% round(digits=3)
+simple.rmse <- rmse(simple.predicted, bikes.test$Count) %>% round(digits=3)
+
+complete.predicted <- exp(predict(complete.lm, bikes.test, type="response")) - 1
+complete.predicted[complete.predicted<0] <- 0
+complete.mae <- mae(complete.predicted, bikes.test$Count) %>% round(digits=3)
+complete.rmse <- rmse(complete.predicted, bikes.test$Count) %>% round(digits=3)
+
+no_w.predicted <- exp(predict(no_w.lm, bikes.test, type="response")) - 1
+no_w.predicted[no_w.predicted<0] <- 0
+no_w.mae <- mae(no_w.predicted, bikes.test$Count) %>% round(digits=3)
+no_w.rmse <- rmse(no_w.predicted, bikes.test$Count) %>% round(digits=3)
+
+no_cat.predicted <-exp(predict(no_cat.lm, bikes.test, type="response")) - 1
+no_cat.predicted[no_cat.predicted<0] <- 0
+no_cat.mae <- mae(no_cat.predicted, bikes.test$Count) %>% round(digits=3)
+no_cat.rmse <- rmse(no_cat.predicted, bikes.test$Count) %>% round(digits=3)
+
+paper.predicted <- exp(predict(paper.lm, bikes.test, type="response")) - 1
+paper.predicted[paper.predicted<0] <- 0
+paper.mae <- mae(paper.predicted, bikes.test$Count) %>% round(digits=3)
+paper.rmse <- rmse(paper.predicted, bikes.test$Count) %>% round(digits=3)
+
+rfe_big.predicted <- exp(predict(rfe_big.lm, bikes.test, type="response")) - 1
+rfe_big.predicted[rfe_big.predicted<0] <- 0
+rfe_big.mae <- mae(rfe_big.predicted, bikes.test$Count) %>% round(digits=3)
+rfe_big.rmse <- rmse(rfe_big.predicted, bikes.test$Count) %>% round(digits=3)
+
+small.predicted <- exp(predict(small.lm, bikes.test, type="response")) - 1
+small.predicted[small.predicted<0] <- 0
+small.mae <- mae(small.predicted, bikes.test$Count) %>% round(digits=3)
+small.rmse <- rmse(small.predicted, bikes.test$Count) %>% round(digits=3)
+
+#AIC for the 6 models
+models_df <- data.frame(
+  AIC(simple.lm, complete.lm, no_w.lm, no_cat.lm, paper.lm, rfe_big.lm, small.lm),
+  "MAE" = c(simple.mae, complete.mae, no_w.mae, no_cat.mae, paper.mae, rfe_big.mae, small.mae),
+  "RMSE" = c(simple.rmse, complete.rmse, no_w.rmse, no_cat.rmse, paper.rmse, rfe_big.rmse, small.rmse))
+
+row.names(models_df) <- c("simple", "complete", "no weather", "no categorical", "paper", "large", "small")
+
+models_df  %>%
+  kbl(caption = " Test Results", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+```
+
+We can observe how the *simple linear regression* model is the worse performing, which is not surprising.
+An interesting fact is that the *small* model, built by eliminating the "useless" features from the *complete* model, end up scoring a lower *RMSE* than the *complete* model itself, while the *MAE* is higher. The *AIC* score indicates that we can accept the hypothesis of a smaller model: the *trade-off* between performance and complexity is acceptable since the *small* model has a lower *AIC* than the *complete* model.
+
+We can also run the *ANOVA* test between the small model and the complete model, since they are nested.
+
+```{r}
+print(anova(small.lm, complete.lm))
+
+```
+
+We can see that the *p-value* is high, therefore we can accept the hypothesis of the smaller model.
+
+### Confidence and prediction intervals
+
+The **confidence interval** provides a range of likely values for the mean response given the specified settings of the predictors.
+
+For example, with a 95% confidence level, we can be 95% confident that the confidence interval contains the population mean for the specified values of the variables in the model. The *confidence interval* helps us assess the practical significance of the results. A wide confidence interval indicates that we can be less confident about the mean of future values.
+
+We can calculate the confidence interval by inverting the *t-distribution*:
+
+\begin{equation}
+    \frac{X_f\hat{\beta}-X_f\beta}{\sqrt{\frac{e'e}{\sigma^2(n-p)}\sigma^2X_f(X'X)^{-1}X_f'}} \sim t(n-p)
+\end{equation}
+ 
+and getting:
+
+\begin{equation}
+    X_f\hat{\beta}\: \pm\: t_{\frac{\alpha}{2}}(n-p)\cdot\sqrt{\frac{e'e}{n-p}}\cdot\sqrt{X_f(X'X)X_f'}
+\end{equation}
+
+We can now visualize the *confidence interval* for the small model.
+
+```{r}
+#confidence interval for small.lm
+confidence.small <- predict(small.lm, bikes.test, interval="confidence")
+
+head(confidence.small)
+```
+
+The **prediction interval** is a range that is likely to contain a single future response for a value of the predictor variable.
+
+For example with a 95% prediction interval, we can be 95% confident that new observations will fall within the interval indicated by the lower and upper values. However, this is only true for values that are within the range included in the analysis.
+
+The *prediction interval* is always wider than the corresponding *confidence interval* and we can show why by deriving it by "inverting" the corresponding *t-distribution*.
+
+We start from the sampling distribution of the prediction error $Y_f-X_f\hat{\beta}$ and we get:
+
+\begin{equation}
+    X_f\hat{\beta} \:\pm\: t_{\frac{\alpha}{2}}(n-p)\cdot\sqrt{\frac{e'e}{n-p}}\cdot\sqrt{1+X_f(X'X)X_f'}
+\end{equation}
+
+We can see how there is a +1 under the square root, which represents the difference with the confidence interval.
+
+```{r}
+#prediction interval for small.lm
+prediction.small <- predict(small.lm, bikes.test, interval="prediction")
+
+head(prediction.small)
+
+```
+
+
+### Residuals Plots
+As we have already stated, *residuals* are empirical approximations of errors:
+
+\begin{equation}
+    e = Y-\hat{Y} \qquad observable\: residuals
+\end{equation}
+
+\begin{equation}
+     \epsilon = Y - X\beta \qquad non \:observable \:errors
+\end{equation}
+
+In order for it to be a good model, the *residuals* should look like they were simulated from *independent identically distributed errors* $\epsilon$
+
+We can visualize this by plotting the *residuals* against the *fitted values* $\hat{Y}$ and the plot should not show any pattern.
+
+```{r}
+
+residuals_df <- data.frame("res"= rstandard(small.lm), "fit"= small.lm$fitted.values)
+
+ggplot(data = residuals_df, aes(x=fit, y=res))+
+  geom_point(alpha = 0.5, size = 1, color = "#121214")+
+  geom_abline(slope = 0, intercept = 0, color="red", linetype = 2, size = 1)+
+  theme(text = element_text(size=20))+
+  xlab("Fitted values")+
+  ylab("Residuals") +
+  ggtitle("Residuals vs Fitted Values") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can observe a weird behaviour of the residuals around zero and negative values, which correspond to the zero values of the response. From this plot we cannot say that the quality of our model is high. The reason is that the actual relation between predictors and response is *not linear*.
+
+We can also display the qq plot in order to assess the normality of the residuals.
+
+```{r}
+
+# Q-Q plot 
+ggplot(data = residuals_df, aes(sample = res))+
+  geom_qq(alpha = 0.5, size = 1, color = "#121214")+
+  stat_qq_line(color = "red", alpha = 0.7, size = 0.5, linetype = 2)+
+  theme(text = element_text(size=20))+
+  ylab("Standardized residuals") +
+  xlab("Theoretical Quantiles")+
+  ggtitle("Residual Q-Q plot") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+As we can see the distribution of the *residuals* is not as normal as we would hope.
+
+## Filter out zero values
+
+We have observed in the section dedicated to the *exploratory data analysis* how there is a strong presence of zero values of the response variable. This is a problem because it clashes with the *assumption of normality* of the response variable, which is fundamental in the general linear model. In fact the response is a linear transformation of the errors which are by definition independent identically normally distributed random variables.
+
+Up to this point I have kept the dataset as it was, without removing any observation.
+In the EDA we have also observed how the zero values of the response correspond exactly to non functioning days, so we can say for sure that when the factorial attribute *Func* has value 0, the value of the response will always be 0. It is not as easy to demonstrate the opposite, since it would be possible to have no user count on a functional day, but it has not occurred in the year represented by the dataset. And also we do not care, since we filter out the observations based on the functional days and not the other way around.
+
+```{r}
+bikes.no_zero <- subset(bikes.dummies, bikes.dummies$Func=="Yes")
+
+ggplot(data=bikes.no_zero) + 
+  geom_histogram(aes(log(Count+1)), binwidth = 0.1) +
+  theme(text = element_text(size=20))+
+  xlab("log bike count (no zero)")
+
+ggplot(data=bikes.no_zero, aes(sample = log(Count+1)))+
+  geom_qq(alpha = 0.5, size=0.8) +
+  theme(text = element_text(size=20))+
+  stat_qq_line(color="red", alpha=0.7, size=0.5, linetype=2)
+  
+
+```
+
+We now fit the best performing model so far (*small.lm*) on the *filtered dataset* in order to compare its performance with the non filtered data.
+
+```{r}
+
+set.seed(3456)
+inTrain <- createDataPartition(y, p= .75, list = FALSE)
+
+bikes_no_zero.train <- bikes.no_zero[inTrain, ]
+bikes_no_zero.test <- bikes.no_zero[-inTrain, ]
+
+no_zero.lm <-lm(log(Count+1) ~ Hour+Temp+Hum+Dew+Rain+Autumn+Spring+Winter+Holiday+Weekend+Sunday+Monday+year_2018, data = bikes_no_zero.train)
+
+summary(no_zero.lm)
+```
+
+We can compare the summary with the model fitted on the unfiltered data
+
+```{r}
+summary(small.lm)
+```
+
+
+```{r}
+no_zero.predicted <- exp(predict(no_zero.lm, bikes_no_zero.test, type="response")) - 1
+no_zero.predicted[no_zero.predicted<0] <- 0
+no_zero.mae <- mae(no_zero.predicted, bikes_no_zero.test$Count) %>% round(digits=3)
+no_zero.rmse <- rmse(no_zero.predicted, bikes_no_zero.test$Count) %>% round(digits=3)
+
+no_zero_df <- data.frame(
+  "MAE" = c(no_zero.mae, small.mae),
+  "RMSE" = c(no_zero.rmse, small.rmse))
+
+row.names(no_zero_df) <- c("no_zero", "small")
+
+no_zero_df%>%
+  kbl(caption = "Subsets used in the analysis", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+```
+```{r}
+
+residuals_no_zero.df <- data.frame("res"= rstandard(no_zero.lm), "fit"=no_zero.lm$fitted.values)
+
+ggplot(data = residuals_no_zero.df, aes(x=fit, y=res))+
+  geom_point(alpha = 0.5, size = 1, color = "#121214")+
+  geom_abline(slope = 0, intercept = 0, color="red", linetype = 2, size = 1)+
+  theme(text = element_text(size=20))+
+  xlab("Fitted values")+
+  ylab("Residuals") +
+  ggtitle("Residuals vs Fitted Values") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Q-Q plot 
+ggplot(data = residuals_no_zero.df, aes(sample = res))+
+  geom_qq(alpha = 0.5, size = 1, color = "#121214")+
+  stat_qq_line(color = "red", alpha = 0.7, size = 0.5, linetype = 2)+
+  theme(text = element_text(size=20))+
+  ylab("Standardized residuals") +
+  xlab("Theoretical Quantiles")+
+  ggtitle("Residual Q-Q plot") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can observe how the situation has improved, but the distribution of the residuals is still not normal.
+
+# Tree-Based Regression Models
+
+In the analysis so far we have seen how inadequate *linear* models are in predicting the response variable of this dataset.
+
+*Tree based models* for regression and classification involve stratifying the predictor space into a number of simple  non overlapping *regions.* Then, in order to make a prediction for a given observation, we use the mean or the mode of the training observations in the region to which it belongs.
+
+A *tree* represents the set of splitting rules used to segment the predictor space.
+
+![](C:\\Users\\Giacomo\\Desktop\\mml\\mml_tesina\\tree.png)
+
+## Regression Trees
+
+The process of building a **regression tree** consists in 2 main steps:
+
+1) Divide the predictor space (the set of possible values of the predictors $X$) into J distinct and non overlapping regions $R_1, \: R_2, \: \dots, \: R_J$
+
+2) For every observation that falls into the region $R_j$ we make the same prediction, which is the mean of the observations of the response variable in the training set that fall in that region.
+
+Having understood the general idea, we now explain how the regions are constructed.
+The goal is to find the regions $R_1, \: R_2, \: \dots, \: R_J$ that minimize the *Residual Sum of Squares*:
+
+\begin{equation}
+    RSS = \sum_{j=1}^J \sum_{i=1}^n (Y_i-\hat{Y_{R_j}})^2
+\end{equation}
+
+Where $\hat{Y_{R_j}}$ is the mean of the observations of the response variable in the $R_j$.
+
+
+Finding the *optimal solution* to this problem would imply considering every possible partition of the feature space, which is computationally unfeasible.
+For this reason we take a *greedy top-down* approach called **Recursive Binary Splitting**.
+Such approach is top-down because it begins at the top of the tree, starting from one single region to which all observations belong (the output of a model with a single region is the mean of all of the observations in the training set, so it is the same as the null model from the previous section), and subsequently it splits the predictor space. Each split is indicated by 2 branches further down the decision tree.
+
+It is *greedy* because the best split is the best at that particular step, rather than looking ahead and considering the best step that will lead to the best tree further down the line.
+The first step in binary splitting is to select a *predictor* $X_j$ and a *cutpoint* $s$ at which the split takes place so that:
+
+\begin{equation}
+    R_1(j,s)=\{ X|X_j<s\} 
+\end{equation}
+
+\begin{equation}
+     R_2(j,s)=\{ X|X_j\ge s\}
+\end{equation}
+
+We consider all all the possible *predictors* and all the possible values for the *cutpoint* $s$ for each *predictor* and then select the *predictor* and *cutpoint* that yield the lowest *RSS*, minimizing the equation:
+
+\begin{equation}
+    \sum_{i:X_i\in R_1(j,s)}(Y_i-\hat{Y_{R_1}})+ \sum_{i:X_i\in R_2(j,s)}(Y_i-\hat{Y_{R_2}}) \:= RSS \: of \: the \: split
+\end{equation}
+
+Next we repeat the process, looking for the best *predictor* and the best *cutpoint* in order to further split the data so as to minimize the *RSS* within each of the resulting regions. The difference is that this time the starting point is not a single region, but one of the regions identified in the previous step.
+
+This process continues until a *stopping condition* is met, one stopping condition involves the number of observations in each region.
+
+We can now fit a *regression tree* that uses the same set of predictors as the complete model in linear regression.
+
+```{r}
+tree.bikes = tree(log(Count+1)~Hour+Temp+Hum+Wind+Visibility+Dew+Solar+Rain+Snow+Autumn+Spring+Winter+Holiday+Func+Weekend+Monday+Tuesday+ Wednesday+Thursday+Sunday+year_2018, bikes.train)
+summary(tree.bikes)
+```
+
+Here we can see the output of the summary of a regression tree fitted on our data.
+
+```{r}
+plot(tree.bikes, type="uniform")
+text(tree.bikes, pretty = 0)
+```
+
+R allows us to print a single *decision tree* in order to visualize the *predictors* and the *cutpoints* selected at each point.
+It is very interesting to see how the *filtering* of the zero values that we carried out manually is done in the first split of our tree. We can also observe that the stopping condition was met after only 5 predictors were used and 9 regions were created.
+
+We can now compute the *MAE* and *RMSE* metrics on the output of the regression tree.
+
+
+```{r}
+tree.pred <- exp(predict(tree.bikes, bikes.test, type="vector"))-1
+tree.pred[tree.pred<0] <- 0
+tree.mae <- mae(tree.pred, bikes.test$Count)
+tree.rmse <- rmse(tree.pred, bikes.test$Count)
+
+print(tree.rmse)
+print(tree.mae)
+```
+
+The results are already better that those of the best linear model, but there is still room for improvement.
+
+## Random Forest
+
+**Random Forests** consist in fitting a certain number of decision trees, each one on a *bootstrap* sample and each time a split in a tree is considered, a random sample of $m$ predictors is chosen as split candidates from the full set of $p$ predictors so that the split is allowed to use only one of these $m$ predictions in order to generate the 2 regions. Typically we choose $m\approx \sqrt{p}$.
+
+In building a *random forest*, the algorithm is not even allowed to consider a majority of the available *predictors* at each step. The idea is that if this was not the case, the all the *bagged trees* would look quite similar because most trees would choose the stronger predictors in their top splits, hence the predictions from bagged trees would be highly *correlated*. We can think of this process as *decorrelating* the trees, thereby making the average of the resulting trees less variable, hence more reliable.
+
+Using a small value for $m$ is typically helpful in presence of a large number of highly correlated predictors.
+
+Here we fit a random forest model using 500 trees and $m=5\approx\sqrt{p=21}$
+
+```{r}
+
+rf.bikes <- randomForest(log(Count+1)~., data=bikes.train, mtry=5)
+
+print(rf.bikes)
+```
+Now we compute the metrics for our *random forest*.
+
+```{r}
+rf.pred <- exp(predict(rf.bikes, bikes.test))-1
+rf.pred[rf.pred<0] <- 0
+
+rf.mae <- mae(rf.pred, bikes.test$Count)
+rf.rmse <- rmse(rf.pred, bikes.test$Count)
+
+print(rf.rmse)
+print(rf.mae)
+```
+The results are significantly better than those from a single tree.
+
+## Boosting
+
+**Boosting** works in a similar way to bagging, except that the trees are fitted *sequentially* and each tree is fitted using information from the previous trees.
+*Boosting* does not involve *bootstrap* sampling.
+
+*Boosting* involves combining a large number of *decision trees*, that learn slowly. The idea is to fit the "current" tree on the *residuals* computed on the output of the "previous" tree, rather than on the *response* value Y, the output of the "current" model is then added to the output of the previous tree, multiplied by the hyperparameter $\lambda$, which we call the *learning rate*.
+Each decision tree can be small, with a small number of terminal nodes $d$, which is another hyperparameter, that represents the *complexity of the boosting ensemble*. The last hyperparameter is the number of trees $B$.
+
+We can now illustrate the *boosting* procedure step by step:
+
+1) The first step is to set $\hat{Y}=0$ and compute the *residuals* from those fake predictions, so that $e_i=Y_i\: \forall\:i$
+2) Then for $b=1, 2, \dots, B \:do:$
+  - fit a tree with d splits on the *training* data $X, e$
+  - update $\hat{Y}$ by adding the output of the new tree: $\hat{Y}=\hat{Y} + \lambda\hat{Y}^{b}$
+  - compute the *residuals* on the output of the combined model: $e_i=e_i-\lambda\hat{Y}^b_i$
+3) After B trees have been fitted, the output of the model is given by: $\hat{Y}=\sum_{b=1}^B\lambda\hat{Y}^b$
+
+We can now fit *Boosted Decision Trees* on our data and observe the results.
+
+```{r}
+boost.bikes <- gbm(log(Count+1)~., data = bikes.train, distribution = "gaussian", n.trees = 10000, interaction.depth = 3)
+summary(boost.bikes)
+```
+
+The output of the summary of the boosted model gives us an idea on the importance of the various predictors. Comparing them with the *recursive feature elimination* we notice that they are similar overall, but there are some differences like the importance of the *Hour* of the day and the *Temperature.*
+
+```{r}
+boost.pred <- exp(predict(boost.bikes, bikes.test))-1
+boost.pred[boost.pred<0] <- 0
+
+boost.mae <- mae(boost.pred, bikes.test$Count)
+boost.rmse <- rmse(boost.pred, bikes.test$Count)
+
+print(boost.mae)
+print(boost.rmse)
+```
+
+The performance of this model is higher than all of the other models considered in this analysis and reflects the work in the paper [@Sathishkumar]. 
+
+
+We can now plot the predictions on the test set against the actual values for both the *boosted trees mode*l and the best performing *linear model* *small.lm.*
+
+```{r}
+act_pred_df <- data.frame(
+  actual = bikes.test$Count,
+  lm_pred = complete.predicted,
+  rf_pred = rf.pred,
+  boost_pred = boost.pred
+)
+
+ggplot() +
+  geom_point(data = act_pred_df, aes(actual, lm_pred), alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", alpha = 0.6, linetype = 2, size = 0.6) +
+  theme(text = element_text(size=20))+
+  xlab("actual response") +
+  ylab("linear model - predicted response")
+
+ggplot()+
+  geom_point(data = act_pred_df, aes(actual, rf_pred), alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", alpha = 0.6, linetype = 2, size=0.6)+
+  theme(text = element_text(size=20))+
+  xlab("actual response") +
+  ylab("random forest - predicted response")
+
+ggplot()+
+  geom_point(data = act_pred_df, aes(actual, boost_pred), alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", alpha = 0.6, linetype = 2, size=0.6)+
+  theme(text = element_text(size=20))+
+  xlab("actual response") +
+  ylab("boosted trees - predicted response")
+
+```
+
+As we can clearly observe the predicted values of the *response* in the *boosted trees model* are way closer to the actual values and they are a lot less spread in the plot than in the *linear model*. The *random forest model* is closer to the *boosted model*, but the last one is clearly the best of the three.
+
+# Performance Recap
+
+We can now recap the performance of the various models analyzed in this project by displaying their *evaluation metrics* next to each other.
+
+```{r}
+recap_df <- data.frame(
+  "MAE" = c(simple.mae, complete.mae, no_w.mae, no_cat.mae, paper.mae, rfe_big.mae, small.mae, tree.mae, rf.mae, boost.mae),
+  "RMSE" = c(simple.rmse, complete.rmse, no_w.rmse, no_cat.rmse, paper.rmse, rfe_big.rmse, small.rmse, tree.rmse, rf.rmse, boost.rmse))
+
+row.names(recap_df) <- c("simple", "complete", "no weather", "no categorical", "paper", "large", "small", "tree", "random forest", "boosted trees")
+
+recap_df  %>%
+  kbl(caption = " Performance Table", booktabs = TRUE) %>%
+  kable_styling(full_width = T)
+```
+
+
+
+# Conclusions
+
+We have explored our data in depth and we have compared different types of models. It is very clear that the relationship between the response variable and the predictors is not very well approximated by a linear model, while a decision tree based regression model had more success.
+
+Even if it wasn't the best in performance or quality of the model, the linear model remains a very understandable way to explore the characteristics of the dataset and study the behavior of the predictors.
+
+As for the fact that the *Boosted Trees* model improved the performance over the *Random Forest*, in my opinion the motivation lays in the fact that the boosted model learns more slowly, building up the performance iteration to iteration. And also having very shallow trees for every iteration ($d=3$) can help with our set of predictors that presents cases of correlation, as we saw in the EDA.
+
+
+# Bibliography
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
